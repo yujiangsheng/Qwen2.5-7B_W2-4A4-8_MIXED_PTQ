@@ -185,6 +185,12 @@ A: 修改 `data_utils.py` 中的 `get_calib_dataset()` 函数，传入自定义�
 - [GPTQ: Accurate Post-Training Quantization](https://arxiv.org/abs/2210.17323)
 - [Qwen2.5 Technical Report](https://github.com/QwenLM/Qwen2.5)
 
-## 📄 License
+## � 作者
+
+**Jiangsheng Yu** - 作者 & 维护者
+
+- GitHub: [@yujiangsheng](https://github.com/yujiangsheng)
+
+## �📄 License
 
 MIT License
