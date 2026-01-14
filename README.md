@@ -31,7 +31,7 @@
 
 本项目实现了一个完整的混合精度量化工作流：
 
-1. **智能配置搜索**：使用遗传算法为每一层找到最优的量化位宽 (W2/W4/W8)
+1. **智能配置搜索**：使用遗传算法为每一层找到最优的量化位宽 (W2/W4)
 2. **敏感度分析**：自动识别对量化敏感的层，采用保守策略
 3. **GGUF 导出**：将配置导出为 llama.cpp 兼容的 GGUF 格式
 4. **性能对比**：与原始模型和统一量化模型进行全面对比
@@ -43,7 +43,7 @@
 | 特性 | 说明 |
 |------|------|
 | 🧬 **遗传算法优化** | 全局搜索最优的逐层位宽配置，避免局部最优 |
-| 🎯 **混合精度量化** | 敏感层 W8，普通层 W4，非敏感层 W2 |
+| 🎯 **混合精度量化** | 高敏感层 W4，低敏感层 W2 |
 | 🔧 **SmoothQuant** | 通过激活值平滑减少量化误差 |
 | 📦 **GGUF 导出** | 完全兼容 llama.cpp 的真实量化推理 |
 | ⚡ **多设备支持** | CUDA / MPS (Apple Silicon) / CPU |
@@ -137,11 +137,11 @@ huggingface-cli download bartowski/Qwen2.5-7B-Instruct-GGUF \
 ### 3. 运行对比测试
 
 ```bash
-# 快速对比测试（推荐！）
+# 三模型对比测试（原始模型 + Q4_K_M + 混合精度）
 python compare_real_quant.py --max_tokens 200
 
-# 完整三模型对比
-python compare_three_models.py --max_tokens 200
+# 跳过原始模型（节省内存）
+python compare_real_quant.py --skip_original --max_tokens 200
 ```
 
 ---
@@ -182,9 +182,7 @@ Qwen2.5-7B_W2A8_Mixed_PTQ/
 │
 ├── 🧪 【测试脚本】
 ├── test_mixed_precision.py          # 模拟量化推理测试
-├── compare_models.py                # 模拟量化 vs 原始模型
-├── compare_real_quant.py            # 真实量化 vs 原始模型
-└── compare_three_models.py          # 三模型全面对比
+└── compare_real_quant.py            # 三模型真实量化对比
 │
 ├── 📦 【输出文件】
 ├── mixed_precision_config.pt        # 量化配置（每层位宽）
@@ -213,7 +211,7 @@ python export_gguf_official.py \
     --output models/qwen2.5-7b-mixed.gguf
 
 # 第3步：运行三模型对比测试
-python compare_three_models.py --max_tokens 200
+python compare_real_quant.py --max_tokens 200
 ```
 
 ### 方案 B：快速体验
@@ -244,7 +242,7 @@ python compare_real_quant.py --max_tokens 200
 | `--target_compression` | 0.25 | 目标压缩比 (0.25 = 25%) |
 | `--output` | `mixed_precision_config.pt` | 输出配置文件路径 |
 
-### compare_three_models.py
+### compare_real_quant.py
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -254,7 +252,7 @@ python compare_real_quant.py --max_tokens 200
 | `--max_tokens` | 200 | 最大生成 token 数 |
 | `--skip_original` | False | 跳过原始模型测试 |
 
-### compare_real_quant.py
+### export_gguf_official.py
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -280,11 +278,11 @@ python compare_real_quant.py --max_tokens 200
 
 | 层类型 | 敏感度 | 推荐位宽 | 原因 |
 |--------|--------|----------|------|
-| Attention Q/K | 高 | W8 | 影响注意力计算精度 |
-| Attention V/O | 中 | W4 | 信息传递层 |
-| FFN Gate/Up | 中 | W4 | 激活函数相关 |
-| FFN Down | 低 | W2-W4 | 输出投影层 |
-| Embedding | 低 | W2-W4 | 词嵌入查表 |
+| Attention Q/K | 高 | W4 | 影响注意力计算精度 |
+| Attention V/O | 高 | W4 | 信息传递层 |
+| FFN Gate/Up | 低 | W2-W4 | 激活函数相关 |
+| FFN Down | 低 | W2 | 输出投影层 |
+| Embedding | 低 | W2 | 词嵌入查表 |
 | LayerNorm | 高 | FP32 | 归一化需要高精度 |
 
 ### 2. 遗传算法优化
@@ -385,14 +383,14 @@ python mixed_precision_ptq.py --target_compression 0.35
 
 **A**: 这是 **token 数量限制**问题，不是量化质量问题。增加 `--max_tokens`：
 ```bash
-python compare_three_models.py --max_tokens 300
+python compare_real_quant.py --max_tokens 300
 ```
 
 ### Q6: 如何只测试 GGUF 模型（不加载原始模型）？
 
 **A**: 使用 `--skip_original` 参数节省内存：
 ```bash
-python compare_three_models.py --skip_original --max_tokens 200
+python compare_real_quant.py --skip_original --max_tokens 200
 ```
 
 ---

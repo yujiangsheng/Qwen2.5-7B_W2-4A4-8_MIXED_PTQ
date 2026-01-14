@@ -221,12 +221,9 @@ class MixedPrecisionLinear(nn.Module):
         """
         前向传播，应用混合精度量化
         
-        对于W8层，跳过量化以保持高精度（视为近似FP16）
+        W2: 低敏感度层，激进压缩
+        W4: 高敏感度层，保持精度
         """
-        # W8层跳过量化，保持高精度
-        if self.w_bits >= 8:
-            return torch.nn.functional.linear(x, self.weight, self.bias)
-        
         # === SmoothQuant风格的激活值平滑 ===
         # 计算激活值的最大绝对值（per-token-per-channel）
         act_max = x.abs().amax(dim=0, keepdim=True).amax(dim=1, keepdim=True)

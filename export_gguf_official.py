@@ -16,7 +16,6 @@ GGUF 格式导出工具（官方库版本）
 量化类型映射：
     - W2 (2-bit) → Q4_0 (简化处理，因 Q2_K 很复杂)
     - W4 (4-bit) → Q4_0
-    - W8 (8-bit) → Q8_0
     - 其他层    → F32 (保持精度)
 
 使用方法：
@@ -178,12 +177,10 @@ def export_mixed_precision_gguf_official(
     # 统计
     w2_count = sum(1 for v in quant_config.values() if v['w_bits'] == 2)
     w4_count = sum(1 for v in quant_config.values() if v['w_bits'] == 4)
-    w8_count = sum(1 for v in quant_config.values() if v['w_bits'] == 8)
     
     print(f"\n📊 量化配置:")
-    print(f"   W2层: {w2_count}")
-    print(f"   W4层: {w4_count}")
-    print(f"   W8层: {w8_count}")
+    print(f"   W2层 (低敏感度): {w2_count}")
+    print(f"   W4层 (高敏感度): {w4_count}")
     
     # 加载模型配置
     print(f"\n📦 加载模型: {model_id}")
@@ -329,14 +326,10 @@ def export_mixed_precision_gguf_official(
                 qtype = gguf.GGMLQuantizationType.Q4_0
                 quantized = quantize_tensor(weight, qtype)
                 q_str = "Q4_0(W2)"
-            elif w_bits == 4:
+            else:  # w_bits == 4 (高敏感度层)
                 qtype = gguf.GGMLQuantizationType.Q4_0
                 quantized = quantize_tensor(weight, qtype)
                 q_str = "Q4_0"
-            else:  # w_bits == 8
-                qtype = gguf.GGMLQuantizationType.Q8_0
-                quantized = quantize_tensor(weight, qtype)
-                q_str = "Q8_0"
             
             total_quantized_size += quantized.nbytes
             

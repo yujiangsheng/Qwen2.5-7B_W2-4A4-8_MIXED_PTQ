@@ -76,7 +76,7 @@ def apply_mixed_precision(model, config: dict) -> tuple:
     tuple
         (模型, 统计信息字典)
     """
-    stats = {'W2': 0, 'W4': 0, 'W8': 0}
+    stats = {'W2': 0, 'W4': 0}
     
     for name, params in config.items():
         parts = name.split('.')
@@ -103,10 +103,8 @@ def apply_mixed_precision(model, config: dict) -> tuple:
                 # 统计
                 if params['w_bits'] == 2:
                     stats['W2'] += 1
-                elif params['w_bits'] == 4:
+                else:  # w_bits == 4
                     stats['W4'] += 1
-                else:
-                    stats['W8'] += 1
                     
         except Exception as e:
             print(f"警告: 无法替换层 {name}: {e}")
@@ -228,14 +226,13 @@ def main():
         model, stats = apply_mixed_precision(model, config)
         
         print("\n✓ 成功应用混合精度量化:")
-        print(f"  W2层: {stats['W2']}个")
-        print(f"  W4层: {stats['W4']}个")
-        print(f"  W8层: {stats['W8']}个")
-        total = stats['W2'] + stats['W4'] + stats['W8']
+        print(f"  W2层 (低敏感度): {stats['W2']}个")
+        print(f"  W4层 (高敏感度): {stats['W4']}个")
+        total = stats['W2'] + stats['W4']
         print(f"  总计: {total}个量化层")
         
         # 计算压缩率
-        bits_total = stats['W2'] * 2 + stats['W4'] * 4 + stats['W8'] * 8
+        bits_total = stats['W2'] * 2 + stats['W4'] * 4
         bits_orig = total * 16
         compression = bits_total / bits_orig if bits_orig > 0 else 1
         print(f"  压缩比: {compression:.1%}")
