@@ -1,22 +1,26 @@
 """
-模型对比测试脚本 (Model Comparison Test)
-========================================
+模拟量化对比测试 (Simulated Quantization Comparison)
+====================================================
 
-本脚本用于对比量化模型与原始模型的推理效果。
+⚠️ 注意：这是【模拟量化】测试，用于验证量化精度，不能获得加速效果！
+        如需真正的加速，请使用 compare_real_quant.py
 
-功能：
------
-1. 加载原始 Qwen2.5-7B-Instruct 模型
-2. 加载混合精度量化后的模型
-3. 使用相同的测试用例对比两个模型的输出
-4. 展示对比结果和性能统计
+本脚本对比【原始模型】与【模拟量化模型】的推理效果。
+
+模拟量化说明：
+-------------
+- 模拟量化：FP32 → 量化 → 反量化 → FP32（有精度损失）
+- 计算仍是 FP32，只是模拟了低精度带来的精度损失
+- 用途：评估量化配置对模型精度的影响
+- 速度：因额外操作，比原始模型更慢
 
 使用方法：
 ---------
 >>> python compare_models.py
-
->>> # 自定义测试
 >>> python compare_models.py --prompt "解释什么是机器学习"
+
+推荐：如需测试真实加速效果，请运行：
+>>> python compare_real_quant.py
 """
 
 import torch
@@ -29,7 +33,11 @@ from quant_utils import MixedPrecisionLinear
 
 
 def get_device() -> str:
-    """自动检测最佳可用设备"""
+    """
+    自动检测最佳可用设备
+    
+    优先级: CUDA > MPS (Apple Silicon) > CPU
+    """
     if torch.cuda.is_available():
         return "cuda"
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -38,7 +46,18 @@ def get_device() -> str:
 
 
 def apply_mixed_precision(model, config: dict) -> tuple:
-    """将混合精度配置应用到模型"""
+    """
+    将混合精度量化配置应用到模型
+    
+    遍历配置中的每个层，将原始 nn.Linear 替换为 MixedPrecisionLinear
+    
+    参数:
+        model: HuggingFace 模型
+        config: 量化配置字典
+    
+    返回:
+        (模型, 统计信息字典)
+    """
     stats = {'W2': 0, 'W4': 0, 'W8': 0}
     
     for name, params in config.items():

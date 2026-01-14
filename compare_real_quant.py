@@ -1,14 +1,37 @@
 """
-llama.cpp 真实量化对比测试 (Real Quantization Comparison with llama.cpp)
-=======================================================================
+真实量化对比测试 (Real Quantization Comparison)
+===============================================
 
-对比原始 Qwen2.5-7B-Instruct 模型 vs Q4_K_M 量化版本的性能。
-使用 llama-cpp-python 进行真正的低精度推理（Metal/MPS 加速）。
+本脚本对比【原始模型】与【真实量化模型】的推理性能。
+
+⚠️ 重要说明：
+-----------
+这是真实量化测试，使用 llama.cpp 进行真正的低精度推理（INT4）。
+与模拟量化不同，真实量化可以获得实际的加速效果！
+
+典型结果：
+---------
+- 推理速度：提升 5-10 倍
+- 内存占用：减少 70-85%
+- 回答质量：接近原始模型
+
+支持的加速后端：
+--------------
+- macOS: Metal (Apple Silicon GPU)
+- Linux/Windows: CUDA (NVIDIA GPU)
+- CPU: 所有平台
 
 使用方法：
 ---------
+# 默认测试（需要先下载 GGUF 模型）
 >>> python compare_real_quant.py
+
+# 自定义测试
 >>> python compare_real_quant.py --max_tokens 200
+
+# 下载 GGUF 模型
+>>> huggingface-cli download bartowski/Qwen2.5-7B-Instruct-GGUF \\
+...     Qwen2.5-7B-Instruct-Q4_K_M.gguf --local-dir models
 """
 
 import torch
@@ -18,7 +41,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def get_device() -> str:
-    """自动检测最佳可用设备"""
+    """
+    自动检测最佳可用设备
+    
+    优先级: CUDA > MPS (Apple Silicon) > CPU
+    """
     if torch.cuda.is_available():
         return "cuda"
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -28,7 +55,20 @@ def get_device() -> str:
 
 def generate_with_transformers(model, tokenizer, prompt: str, device: str, 
                                 max_new_tokens: int = 100) -> tuple:
-    """使用 Transformers 生成回复"""
+    """
+    使用 Transformers 生成回复（原始模型）
+    
+    参数:
+        model: HuggingFace 模型
+        tokenizer: 分词器
+        prompt: 用户输入
+        device: 计算设备
+        max_new_tokens: 最大生成 token 数
+    
+    返回:
+        (回复内容, 耗时秒数, 生成的token数)
+    """
+    # 构建对话格式
     messages = [{"role": "user", "content": prompt}]
     text = tokenizer.apply_chat_template(
         messages, 
@@ -39,23 +79,25 @@ def generate_with_transformers(model, tokenizer, prompt: str, device: str,
     inputs = tokenizer(text, return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
-    # 预热
+    # 预热（让 GPU 进入工作状态）
     with torch.no_grad():
         _ = model.generate(**inputs, max_new_tokens=3, pad_token_id=tokenizer.eos_token_id)
     
+    # 正式推理并计时
     start_time = time.time()
     
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            do_sample=False,
+            do_sample=False,  # 贪婪解码，结果可复现
             pad_token_id=tokenizer.eos_token_id
         )
     
     elapsed = time.time() - start_time
     new_tokens = outputs.shape[1] - inputs['input_ids'].shape[1]
     
+    # 解码输出
     response = tokenizer.decode(
         outputs[0][inputs['input_ids'].shape[1]:], 
         skip_special_tokens=True
@@ -65,20 +107,33 @@ def generate_with_transformers(model, tokenizer, prompt: str, device: str,
 
 
 def generate_with_llamacpp(llm, prompt: str, max_new_tokens: int = 100) -> tuple:
-    """使用 llama.cpp 生成回复"""
-    # Qwen2.5 的聊天模板
+    """
+    使用 llama.cpp 生成回复（真实量化模型）
+    
+    llama.cpp 使用真正的低精度整数运算，可以获得实际加速。
+    
+    参数:
+        llm: llama_cpp.Llama 模型实例
+        prompt: 用户输入
+        max_new_tokens: 最大生成 token 数
+    
+    返回:
+        (回复内容, 耗时秒数, 生成的token数)
+    """
+    # Qwen2.5 的聊天模板格式
     formatted_prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
     
     # 预热
     _ = llm(formatted_prompt, max_tokens=3, echo=False)
     
+    # 正式推理并计时
     start_time = time.time()
     
     output = llm(
         formatted_prompt,
         max_tokens=max_new_tokens,
         echo=False,
-        stop=["<|im_end|>", "<|endoftext|>"]
+        stop=["<|im_end|>", "<|endoftext|>"]  # 停止词
     )
     
     elapsed = time.time() - start_time
@@ -90,7 +145,7 @@ def generate_with_llamacpp(llm, prompt: str, max_new_tokens: int = 100) -> tuple
 
 
 def print_comparison_result(prompt: str, orig_result: tuple, quant_result: tuple, idx: int):
-    """打印对比结果"""
+    """打印单个测试用例的对比结果"""
     orig_response, orig_time, orig_tokens = orig_result
     quant_response, quant_time, quant_tokens = quant_result
     
