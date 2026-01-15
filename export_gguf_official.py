@@ -1,39 +1,16 @@
 """
-GGUF 格式导出工具（官方库版本）
-============================
+GGUF 格式导出工具 (GGUF Export Tool)
+===================================
 
-功能说明：
----------
-使用 HuggingFace 的官方 gguf 库将混合精度量化配置导出为 GGUF 格式，
-确保与 llama.cpp 完全兼容。
+使用官方 gguf 库将混合精度配置导出为 GGUF 格式，兼容 llama.cpp。
 
-工作流程：
-    1. 加载混合精度量化配置 (mixed_precision_config.pt)
-    2. 加载原始 HuggingFace 模型
-    3. 根据配置对每层进行 Q4_0/Q8_0 量化
-    4. 生成包含 tokenizer 和模型元数据的 GGUF 文件
+量化策略 (W4 + A4/A8):
+  - 权重: 固定 W4 → Q4_0 量化
+  - 激活: A4/A8 (导出时不影响权重格式)
 
-量化类型映射：
-    - W2 (2-bit) → Q4_0 (简化处理，因 Q2_K 很复杂)
-    - W4 (4-bit) → Q4_0
-    - 其他层    → F32 (保持精度)
-
-使用方法：
----------
-    # 基础用法
-    >>> python export_gguf_official.py
-    
-    # 自定义输出路径
-    >>> python export_gguf_official.py --output models/my-model.gguf
-    
-    # 指定配置文件
-    >>> python export_gguf_official.py --config my_config.pt --output models/custom.gguf
-
-依赖：
-----
-    pip install gguf transformers torch huggingface_hub
-
-作者：Jiangsheng Yu
+用法:
+  python export_gguf_official.py
+  python export_gguf_official.py --output models/custom.gguf
 """
 
 import torch
@@ -41,26 +18,13 @@ import numpy as np
 import os
 import argparse
 import gc
-from pathlib import Path
-from typing import Dict, Any
 from tqdm import tqdm
-
 from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
-
-# 使用官方 gguf 库
 import gguf
+from gguf import quants as gguf_quants
 
-
-# ============================================================================
-# 工具函数
-# ============================================================================
 
 def get_device() -> str:
-    """
-    自动检测最佳计算设备
-    
-    注意：导出过程主要在 CPU 上进行，此函数用于加载模型
-    """
     if torch.cuda.is_available():
         return "cuda"
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -68,72 +32,18 @@ def get_device() -> str:
     return "cpu"
 
 
-# 使用 gguf 库自带的量化函数
-from gguf import quants as gguf_quants
-
-
 def quantize_tensor(weight: np.ndarray, qtype: gguf.GGMLQuantizationType) -> np.ndarray:
-    """
-    使用 gguf 库的量化函数对张量进行量化
-    
-    参数:
-        weight: 原始权重张量 (np.ndarray)
-        qtype: GGML 量化类型 (Q4_0, Q8_0 等)
-    
-    返回:
-        np.ndarray: 量化后的数据 (dtype=uint8)
-    
-    量化格式说明:
-        - Q4_0: 每32个元素一个 block，包含 1个 FP16 scale + 16 bytes (32个4-bit值)
-        - Q8_0: 每32个元素一个 block，包含 1个 FP16 scale + 32 bytes (32个8-bit值)
-    """
+    """使用 gguf 库量化张量"""
     return gguf_quants.quantize(weight.astype(np.float32), qtype)
 
 
 def convert_name_hf_to_gguf(name: str) -> str:
-    """
-    将 HuggingFace 模型的权重名称转换为 GGUF 格式
-    
-    参数:
-        name: HuggingFace 格式的权重名称
-              例: "model.layers.0.self_attn.q_proj.weight"
-    
-    返回:
-        str: GGUF 格式的权重名称
-             例: "blk.0.attn_q.weight"
-    
-    名称映射规则:
-        HuggingFace               →  GGUF
-        ----------------------------------------
-        model.                    →  (移除)
-        layers.N                  →  blk.N
-        embed_tokens              →  token_embd
-        input_layernorm           →  attn_norm
-        post_attention_layernorm  →  ffn_norm
-        self_attn.q_proj          →  attn_q
-        self_attn.k_proj          →  attn_k
-        self_attn.v_proj          →  attn_v
-        self_attn.o_proj          →  attn_output
-        mlp.gate_proj             →  ffn_gate
-        mlp.up_proj               →  ffn_up
-        mlp.down_proj             →  ffn_down
-        norm.weight (顶层)        →  output_norm.weight
-        lm_head.weight            →  output.weight
-    """
-    # 先处理 model. 前缀
+    """将 HuggingFace 权重名转换为 GGUF 格式"""
     name = name.replace("model.", "")
-    
-    # 处理层编号
     name = name.replace("layers.", "blk.")
-    
-    # 处理 embed_tokens
     name = name.replace("embed_tokens.weight", "token_embd.weight")
-    
-    # 处理 layernorm（注意：使用完整模式避免误替换）
     name = name.replace(".input_layernorm.weight", ".attn_norm.weight")
     name = name.replace(".post_attention_layernorm.weight", ".ffn_norm.weight")
-    
-    # 处理 attention 相关
     name = name.replace(".self_attn.q_proj.weight", ".attn_q.weight")
     name = name.replace(".self_attn.k_proj.weight", ".attn_k.weight")
     name = name.replace(".self_attn.v_proj.weight", ".attn_v.weight")
@@ -141,68 +51,45 @@ def convert_name_hf_to_gguf(name: str) -> str:
     name = name.replace(".self_attn.q_proj.bias", ".attn_q.bias")
     name = name.replace(".self_attn.k_proj.bias", ".attn_k.bias")
     name = name.replace(".self_attn.v_proj.bias", ".attn_v.bias")
-    
-    # 处理 MLP
     name = name.replace(".mlp.gate_proj.weight", ".ffn_gate.weight")
     name = name.replace(".mlp.up_proj.weight", ".ffn_up.weight")
     name = name.replace(".mlp.down_proj.weight", ".ffn_down.weight")
-    
-    # 处理最后的 norm（只处理 "norm.weight" 开头的情况，不是 ".attn_norm.weight"）
     if name == "norm.weight":
         name = "output_norm.weight"
-    
-    # lm_head 特殊处理
     if name == "lm_head.weight":
         name = "output.weight"
-    
     return name
 
 
-def export_mixed_precision_gguf_official(
-    model_id: str,
-    config_path: str,
-    output_path: str
-):
-    """
-    使用官方 gguf 库导出混合精度模型
-    """
-    print("\n" + "="*80)
-    print("🔧 混合精度 GGUF 导出 (官方库)")
-    print("="*80)
+def export_mixed_precision_gguf(model_id: str, config_path: str, output_path: str):
+    """导出混合精度 GGUF 模型"""
+    print("\n" + "="*70)
+    print("🔧 混合精度 GGUF 导出")
+    print("="*70)
     
     # 加载量化配置
-    print(f"\n📄 加载量化配置: {config_path}")
+    print(f"\n📄 加载配置: {config_path}")
     quant_config = torch.load(config_path, weights_only=False)
     
-    # 统计
-    w2_count = sum(1 for v in quant_config.values() if v['w_bits'] == 2)
-    w4_count = sum(1 for v in quant_config.values() if v['w_bits'] == 4)
+    a4_count = sum(1 for v in quant_config.values() if v['a_bits'] == 4)
+    a8_count = sum(1 for v in quant_config.values() if v['a_bits'] == 8)
+    print(f"   A4层: {a4_count}, A8层: {a8_count}")
     
-    print(f"\n📊 量化配置:")
-    print(f"   W2层 (低敏感度): {w2_count}")
-    print(f"   W4层 (高敏感度): {w4_count}")
-    
-    # 加载模型配置
+    # 加载模型
     print(f"\n📦 加载模型: {model_id}")
     hf_config = AutoConfig.from_pretrained(model_id)
     
-    # 加载模型
-    print("⏳ 加载模型权重...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16,
-        device_map="cpu"
-    )
+    print("⏳ 加载权重...")
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, device_map="cpu")
     
-    # 加载 tokenizer 获取词表信息
     print("⏳ 加载 tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     
     # 创建 GGUF writer
-    print(f"\n📝 创建 GGUF 文件: {output_path}")
+    print(f"\n📝 创建 GGUF: {output_path}")
     writer = gguf.GGUFWriter(output_path, "qwen2")
     
-    # 添加模型元数据
+    # 添加元数据
     writer.add_architecture()
     writer.add_name(model_id.split("/")[-1] + "-mixed")
     writer.add_context_length(hf_config.max_position_embeddings)
@@ -214,18 +101,12 @@ def export_mixed_precision_gguf_official(
     writer.add_rope_freq_base(hf_config.rope_theta)
     writer.add_layer_norm_rms_eps(hf_config.rms_norm_eps)
     
-    # 添加完整的 tokenizer 信息
-    print("📝 添加 tokenizer 信息...")
-    
-    # 使用模型的 vocab_size（比 tokenizer 大，有 padding）
-    model_vocab_size = hf_config.vocab_size  # 152064
+    # 添加 tokenizer
+    print("📝 添加 tokenizer...")
+    model_vocab_size = hf_config.vocab_size
     tokenizer_vocab = tokenizer.get_vocab()
-    tokenizer_vocab_size = len(tokenizer_vocab)  # 151665
+    tokenizer_vocab_size = len(tokenizer_vocab)
     
-    print(f"   模型 vocab_size: {model_vocab_size}")
-    print(f"   Tokenizer vocab_size: {tokenizer_vocab_size}")
-    
-    # 创建完整的词表（填充到模型大小）
     tokens = [""] * model_vocab_size
     scores = [0.0] * model_vocab_size
     token_types = [gguf.TokenType.NORMAL] * model_vocab_size
@@ -235,38 +116,30 @@ def export_mixed_precision_gguf_official(
             tokens[idx] = token
             scores[idx] = -float(idx)
     
-    # 填充未使用的 token 位置
     for i in range(tokenizer_vocab_size, model_vocab_size):
         tokens[i] = f"[PAD_{i}]"
         token_types[i] = gguf.TokenType.UNUSED
     
-    # 设置特殊 token
-    if tokenizer.bos_token_id is not None and tokenizer.bos_token_id < len(token_types):
+    if tokenizer.bos_token_id is not None:
         token_types[tokenizer.bos_token_id] = gguf.TokenType.CONTROL
-    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id < len(token_types):
+    if tokenizer.eos_token_id is not None:
         token_types[tokenizer.eos_token_id] = gguf.TokenType.CONTROL
-    if tokenizer.pad_token_id is not None and tokenizer.pad_token_id < len(token_types):
+    if tokenizer.pad_token_id is not None:
         token_types[tokenizer.pad_token_id] = gguf.TokenType.CONTROL
-    if tokenizer.unk_token_id is not None and tokenizer.unk_token_id < len(token_types):
-        token_types[tokenizer.unk_token_id] = gguf.TokenType.UNKNOWN
     
-    # 添加词表
     writer.add_tokenizer_model("gpt2")
     writer.add_add_bos_token(False)
     writer.add_add_eos_token(False)
     
-    # 添加 pre-tokenizer 类型（Qwen2 需要）
     try:
         writer.add_tokenizer_pre("qwen2")
     except:
-        # 旧版本 gguf 可能没有这个方法
         pass
     
     writer.add_token_list(tokens)
     writer.add_token_scores(scores)
     writer.add_token_types(token_types)
     
-    # 添加特殊 token ID
     if tokenizer.bos_token_id is not None:
         writer.add_bos_token_id(tokenizer.bos_token_id)
     if tokenizer.eos_token_id is not None:
@@ -274,77 +147,47 @@ def export_mixed_precision_gguf_official(
     if tokenizer.pad_token_id is not None:
         writer.add_pad_token_id(tokenizer.pad_token_id)
     
-    # 添加 chat template
     if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
         writer.add_chat_template(tokenizer.chat_template)
     
-    # 添加 merges（BPE tokenizer 需要）
+    # 添加 merges
     try:
         from huggingface_hub import hf_hub_download
         import json
-        
-        # 从 HuggingFace 下载 tokenizer.json
-        tokenizer_json_path = hf_hub_download(model_id, 'tokenizer.json')
-        print(f"   Tokenizer JSON: {tokenizer_json_path}")
-        
-        with open(tokenizer_json_path, 'r') as f:
-            tokenizer_json = json.load(f)
-        
-        if 'model' in tokenizer_json and 'merges' in tokenizer_json['model']:
-            merges = tokenizer_json['model']['merges']
-            writer.add_token_merges(merges)
-            print(f"   ✅ 添加了 {len(merges)} 个 BPE merges")
-        else:
-            print("   ⚠️  tokenizer.json 中没有 merges")
+        tokenizer_json = hf_hub_download(model_id, 'tokenizer.json')
+        with open(tokenizer_json, 'r') as f:
+            tj = json.load(f)
+        if 'model' in tj and 'merges' in tj['model']:
+            writer.add_token_merges(tj['model']['merges'])
+            print(f"   添加了 {len(tj['model']['merges'])} 个 merges")
     except Exception as e:
-        print(f"   ⚠️  无法添加 merges: {e}")
+        print(f"   ⚠️ 无法添加 merges: {e}")
     
-    # 处理权重
-    print("\n🔄 量化并添加权重...")
-    
-    total_original_size = 0
-    total_quantized_size = 0
+    # 量化权重
+    print("\n🔄 量化权重...")
+    total_orig, total_quant = 0, 0
     
     for name, param in tqdm(model.named_parameters(), desc="处理权重"):
         weight = param.data.cpu().numpy()
-        original_size = weight.nbytes
-        total_original_size += original_size
+        total_orig += weight.nbytes
         
-        # 转换名称
         gguf_name = convert_name_hf_to_gguf(name)
-        original_shape = weight.shape
-        
-        # 查找量化配置
         layer_name = name.replace(".weight", "").replace(".bias", "")
         
-        # 决定量化类型
         if layer_name in quant_config and ".weight" in name:
-            w_bits = quant_config[layer_name]['w_bits']
-            
-            if w_bits == 2:
-                # Q2_K 太复杂，用 Q4_0 替代
-                qtype = gguf.GGMLQuantizationType.Q4_0
-                quantized = quantize_tensor(weight, qtype)
-                q_str = "Q4_0(W2)"
-            else:  # w_bits == 4 (高敏感度层)
-                qtype = gguf.GGMLQuantizationType.Q4_0
-                quantized = quantize_tensor(weight, qtype)
-                q_str = "Q4_0"
-            
-            total_quantized_size += quantized.nbytes
-            
-            # 添加量化张量 - 使用 gguf 库的量化数据，不需要手动指定 raw_shape
+            # 权重使用 Q4_0 量化
+            qtype = gguf.GGMLQuantizationType.Q4_0
+            quantized = quantize_tensor(weight, qtype)
+            total_quant += quantized.nbytes
             writer.add_tensor(gguf_name, quantized, raw_dtype=qtype)
         else:
-            # 非量化层，使用 F32 以确保兼容性
+            # 非量化层使用 F32
             weight_f32 = weight.astype(np.float32)
-            total_quantized_size += weight_f32.nbytes
+            total_quant += weight_f32.nbytes
             writer.add_tensor(gguf_name, weight_f32, raw_dtype=gguf.GGMLQuantizationType.F32)
         
-        # 释放内存
         del weight
     
-    # 清理模型
     del model
     gc.collect()
     
@@ -355,49 +198,28 @@ def export_mixed_precision_gguf_official(
     writer.write_tensors_to_file()
     writer.close()
     
-    # 计算统计
     file_size = os.path.getsize(output_path)
-    compression = total_original_size / file_size if file_size > 0 else 1
+    compression = total_orig / file_size if file_size > 0 else 1
     
-    print(f"\n{'='*80}")
+    print(f"\n{'='*70}")
     print(f"✅ 导出完成!")
-    print(f"{'='*80}")
-    print(f"\n📁 输出文件: {output_path}")
-    print(f"📊 原始大小: {total_original_size/1024/1024/1024:.2f} GB")
-    print(f"📊 文件大小: {file_size/1024/1024/1024:.2f} GB")
-    print(f"📊 压缩比: {compression:.2f}x")
+    print(f"{'='*70}")
+    print(f"   输出: {output_path}")
+    print(f"   原始大小: {total_orig/1e9:.2f} GB")
+    print(f"   文件大小: {file_size/1e9:.2f} GB")
+    print(f"   压缩比: {compression:.2f}x")
 
 
 def main():
-    """
-    主函数：解析参数并执行 GGUF 导出
-    """
-    parser = argparse.ArgumentParser(
-        description="混合精度 GGUF 导出工具（使用官方 gguf 库）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用示例:
-  python export_gguf_official.py
-  python export_gguf_official.py --output models/custom.gguf
-  python export_gguf_official.py --config my_config.pt --output models/my_model.gguf
-        """
-    )
-    parser.add_argument('--model_id', type=str, default="Qwen/Qwen2.5-7B-Instruct",
-                        help="HuggingFace 模型 ID")
-    parser.add_argument('--config', type=str, default="mixed_precision_config.pt",
-                        help="混合精度量化配置文件路径")
-    parser.add_argument('--output', type=str, default="models/qwen2.5-7b-mixed.gguf",
-                        help="输出 GGUF 文件路径")
+    parser = argparse.ArgumentParser(description="混合精度 GGUF 导出工具")
+    parser.add_argument('--model_id', type=str, default="Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument('--config', type=str, default="mixed_precision_config.pt")
+    parser.add_argument('--output', type=str, default="models/qwen2.5-7b-mixed.gguf")
     
     args = parser.parse_args()
-    
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     
-    export_mixed_precision_gguf_official(
-        args.model_id,
-        args.config,
-        args.output
-    )
+    export_mixed_precision_gguf(args.model_id, args.config, args.output)
 
 
 if __name__ == "__main__":

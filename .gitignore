@@ -1,7 +1,30 @@
-# Ignore
-.DS_Store
-*.pyc
+# Python
 __pycache__/
-.venv/
-models/*.gguf
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
 
+# 虚拟环境
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# 模型文件（太大不纳入版本控制）
+*.gguf
+*.bin
+*.safetensors
+
+# 输出文件
+mixed_precision_config.pt
