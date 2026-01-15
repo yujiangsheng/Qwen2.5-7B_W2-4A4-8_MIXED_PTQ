@@ -1,30 +1,56 @@
-# Python
+# ============================================================
+# Qwen2.5-7B 混合精度 PTQ 项目 .gitignore
+# ============================================================
+
+# === Python ===
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-*.egg-info/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
 .eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# 虚拟环境
+# === 虚拟环境 ===
 .venv/
 venv/
 ENV/
+env/
 
-# IDE
-.vscode/
+# === IDE ===
 .idea/
+.vscode/
 *.swp
 *.swo
 
-# macOS
+# === 系统文件 ===
 .DS_Store
+Thumbs.db
 
-# 模型文件（太大不纳入版本控制）
+# === 模型文件（太大不提交）===
+models/*.gguf
 *.gguf
 *.bin
 *.safetensors
 
-# 输出文件
-mixed_precision_config.pt
+# === 输出文件 ===
+*.pt
+!requirements.txt
+
+# === 日志 ===
+*.log
+logs/
+

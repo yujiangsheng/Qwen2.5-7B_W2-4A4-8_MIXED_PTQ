@@ -1,20 +1,34 @@
-# Qwen2.5-7B 混合精度 PTQ (W4 + A4/A8) 依赖包
-# ===========================================
+# ============================================================
+# Qwen2.5-7B 混合精度 PTQ 项目依赖
+# ============================================================
+#
+# 安装: pip install -r requirements.txt
+#
+# ============================================================
 
-# 核心依赖
-torch>=2.0.0
-transformers>=4.35.0
-numpy>=1.24.0
-tqdm>=4.65.0
+# === 核心依赖 ===
+torch>=2.0.0                  # PyTorch 深度学习框架
+transformers>=4.35.0          # HuggingFace Transformers
+numpy>=1.24.0                 # 数值计算
+tqdm>=4.65.0                  # 进度条
 
-# 模拟量化 (mixed_precision_ptq.py)
-datasets>=2.14.0
-accelerate>=0.24.0
+# === 数据与加速 ===
+datasets>=2.14.0              # 校准数据集加载
+accelerate>=0.24.0            # 模型加载与设备映射
 
-# 真实量化 (compare_real_quant.py)
-huggingface-hub>=0.20.0
-gguf>=0.6.0
+# === GGUF 导出 ===
+huggingface-hub>=0.20.0       # 模型下载
+gguf>=0.6.0                   # GGUF 格式导出
 
-# llama-cpp-python 需单独安装:
-# macOS (Metal): CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python
-# Linux (CUDA):  CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+# ============================================================
+# llama-cpp-python 需单独安装（用于真实量化推理）：
+#
+# macOS (Metal):
+#   CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python
+#
+# Linux/Windows (CUDA):
+#   CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+#
+# CPU 版本:
+#   pip install llama-cpp-python
+# ============================================================
